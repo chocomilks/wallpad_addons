@@ -10,9 +10,11 @@ COPY js /js
 
 # Install requirements for add-on
 RUN apk add --no-cache jq npm make gcc g++ python3 linux-headers udev && \
+    npm install -g npm@10 && \
+    npm cache clean --force && \
     npm init -f && \
     npm install mqtt && \
-    npm install serialport --build-from-source=serialport 
+    npm install serialport --build-from-source=serialport
 
 WORKDIR /share
 
