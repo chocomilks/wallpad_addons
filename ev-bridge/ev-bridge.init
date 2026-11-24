@@ -1,0 +1,17 @@
+#!/bin/sh /etc/rc.common
+# install to /etc/init.d/ev-bridge  (chmod +x)
+START=95
+STOP=10
+USE_PROCD=1
+start_service() {
+    procd_open_instance
+    procd_set_param command /bin/sh /root/ev-bridge.sh
+    procd_set_param respawn 3600 5 0
+    procd_close_instance
+}
+stop_service() {
+    [ -f /tmp/ev_poller.pid ] && kill "$(cat /tmp/ev_poller.pid)" 2>/dev/null
+    rm -f /tmp/ev_poller.pid /tmp/ev_mon_deadline
+    pkill -f "/root/ev-bridge.sh" 2>/dev/null
+    pkill -f "mosquitto_sub.*wallpad/elevator" 2>/dev/null
+}
