@@ -204,7 +204,7 @@ function frameCard(f){const d=document.createElement('div');
   d.innerHTML=(f.thumb?`<img src="${f.thumb}">`:'')+`<div class="m">${m}</div>`;return d}
 function showRes(el,r){el.classList.remove('hide');const ok=r.result==='match';
   let t=`<span class="${ok?'ok':r.result==='error'?'bad':'warn'}">${RES[r.result]||r.result}</span>`;
-  if(ok)t+=` — ${esc(r.person)} (${r.sim}, 연속 ${r.streak})`+(r.mode==='test'?' <span class="mut">· 테스트라 문은 안 엶</span>':r.opened?' · 문 열림':'');
+  if(ok)t+=` — ${esc(r.person)} (${r.sim}, 연속 ${r.streak})`+(r.mode==='test'?' <span class="mut">· 테스트라 문은 안 엶</span>':r.opened?' · 문 열림':r.open_error?` · <span class="bad">문 열기 실패: ${esc(r.open_error)}</span>`:' <span class="mut">· 자동 열기 꺼짐</span>');
   else if(r.best&&r.best.name)t+=` <span class="mut">최고 ${esc(r.best.name)} ${r.best.sim}</span>`;
   if(r.detail)t+=` <span class="mut">${esc(r.detail)}</span>`;
   t+=` <span class="mut" style="font-weight:400">· ${r.frames}장 / ${r.duration}초</span>`;
@@ -284,7 +284,7 @@ $('#sTuneClr').onclick=async()=>{if(confirm('튜닝용으로 저장된 프레임
 /* ---------- 기록 ---------- */
 async function loadLog(){const ev=await api('events');$('#lBody').innerHTML=ev.map(e=>`<tr><td>${new Date(e.ts*1000).toLocaleString()}</td>
   <td>${{auto:'실제',test:'테스트'}[e.mode]||e.mode}${e.trigger&&e.trigger!=='ui'?' <span class="mut">'+esc(e.trigger)+'</span>':''}</td>
-  <td class="${e.result==='match'?'ok':e.result==='error'?'bad':''}">${RES[e.result]||e.result}${e.opened?' · 열림':''}</td>
+  <td class="${e.result==='match'&&!e.open_error?'ok':e.result==='error'||e.open_error?'bad':''}">${RES[e.result]||e.result}${e.opened?' · 열림':e.open_error?' · 열기 실패':''}</td>
   <td>${esc(e.person||(e.best&&e.best.name)||'')}</td><td>${e.sim??(e.best?e.best.sim:'')}</td><td>${e.frames}/${e.duration}</td></tr>`).join('')||'<tr><td colspan=6 class="mut">기록 없음</td></tr>'}
 
 loadStatus();setInterval(loadStatus,5000);

@@ -218,12 +218,16 @@ class Scanner:
         if decision and decision["result"] == "match":
             opened = False
             if mode == "auto" and st["door"]["auto_open"]:
+                ent = st["door"]["script"]
                 try:
-                    await ha.run_script(st["door"]["script"], {"person": decision["person"],
-                                                               "similarity": decision["sim"]})
+                    # HA는 없는 엔티티 호출도 오류 없이 넘기므로 먼저 존재 확인
+                    if not await ha.state(ent):
+                        raise RuntimeError(f"{ent} 엔티티가 HA에 없음")
+                    await ha.run_script(ent, {"person": decision["person"], "similarity": decision["sim"]})
                     opened = True
                 except Exception as e:  # noqa: BLE001
                     decision["open_error"] = str(e)
+                    log.error("문 열기 실패: %s", e)
             decision["opened"] = opened
             return decision
         if decision:
