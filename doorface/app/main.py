@@ -144,6 +144,7 @@ class State:
             os.remove(zp)
         self.model_state = "모델 로딩 중"
         eng = Engine(d, det, rec)
+        log.info("추론 속도(ms): %s", eng.warmup())
 
         def emb_from_crop(path):
             img = cv2.imread(path)
@@ -244,7 +245,8 @@ async def index():
 @app.get("/api/status")
 async def status():
     persons, M, _ = S.people.gallery()
-    return {"model": S.pack, "model_state": S.model_state, "mqtt": bool(S.mqtt and S.mqtt.connected),
+    return {"model": S.pack, "model_state": S.model_state,
+            "bench": S.engine.bench if S.engine else None, "mqtt": bool(S.mqtt and S.mqtt.connected),
             "pubkey": S.capturer.public_key(), "busy": S.scanner.busy, "people": len(S.people.data["people"]),
             "samples": int(len(M)), "settings": S.settings.get(), "last": S.last,
             "mock": bool(S.capturer.mock_dir)}
@@ -343,7 +345,7 @@ async def samples_upload(pid: str, file: UploadFile = File(...)):
     img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         raise HTTPException(400, "이미지를 읽을 수 없음")
-    faces = await asyncio.to_thread(S.engine.analyze, img)
+    faces = await asyncio.to_thread(S.engine.analyze, img, 640)
     if not faces:
         raise HTTPException(400, "얼굴을 찾지 못함")
     f = faces[0]

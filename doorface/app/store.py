@@ -22,6 +22,7 @@ DEFAULT_SETTINGS = {
         "min_face": 70,         # 얼굴 최소 크기(px)
         "max_yaw": 0.35,        # 정면도 한계(0=정면)
         "max_pitch": 0.35,
+        "det_size": 320,        # 검출 입력 크기(작을수록 빠름, 문 앞 얼굴엔 320 충분)
     },
     "door": {"auto_open": False, "script": "script.doorface_open"},
     "tuning_save": False,
