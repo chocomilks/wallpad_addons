@@ -8,6 +8,12 @@
 
 
 
+### Doorface 현관 얼굴인식 (doorface)
+
+ 코맥스 월패드(안드로이드) 세대현관 도어카메라 영상을 망고(OpenWrt) adb 경유로 캡처해 얼굴을 인식하고,
+ 등록된 가족이면 HA 스크립트로 현관문을 여는 애드온입니다. 사람 등록·판정 기준 조정은 사이드바 패널에서 합니다.
+ 자세한 설정은 [doorface/README.md](doorface/README.md)를 참고하세요.
+
 ### Kocom Wallpad Controller with RS485 (kocomRS485)
 
  랜이님이 만든 코콤 월패드 파이썬 프로그램을 애드온으로 포팅한 것입니다.

@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Doorface</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1c1f24;--mut:#6b7280;--line:#e5e7eb;--acc:#2563eb;--ok:#16a34a;--bad:#dc2626;--warn:#d97706}
+@media (prefers-color-scheme:dark){:root{--bg:#111318;--card:#1b1e25;--fg:#e8eaed;--mut:#9aa1ad;--line:#2b2f38;--acc:#60a5fa;--ok:#22c55e;--bad:#f87171;--warn:#fbbf24}}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;background:var(--bg);color:var(--fg)}
+header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+header h1{font-size:16px;margin:0 8px 0 0}
+.chip{font-size:12px;padding:2px 8px;border-radius:99px;background:var(--bg);border:1px solid var(--line);color:var(--mut)}
+.chip.ok{color:var(--ok);border-color:var(--ok)}.chip.bad{color:var(--bad);border-color:var(--bad)}.chip.warn{color:var(--warn);border-color:var(--warn)}
+nav{display:flex;gap:4px;padding:8px 14px;overflow-x:auto;background:var(--card);border-bottom:1px solid var(--line)}
+nav button{background:none;border:0;padding:6px 12px;border-radius:8px;color:var(--mut);font-size:14px;cursor:pointer;white-space:nowrap}
+nav button.on{background:var(--bg);color:var(--fg);font-weight:600}
+main{max-width:980px;margin:0 auto;padding:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.card h2{font-size:15px;margin:0 0 10px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{border:1px solid var(--line);background:var(--card);color:var(--fg);padding:7px 14px;border-radius:8px;cursor:pointer;font-size:14px}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}.btn.danger{color:var(--bad)}.btn:disabled{opacity:.5;cursor:default}
+input,select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+input[type=range]{padding:0;width:180px}
+label.f{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--mut)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.fr{border:2px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg);font-size:12px;position:relative}
+.fr img{width:100%;display:block}.fr .m{padding:4px 6px}
+.fr.pass{border-color:var(--ok)}.fr.fail{border-color:var(--bad)}.fr.sel{outline:3px solid var(--acc)}
+.fr .ck{position:absolute;top:6px;left:6px;width:20px;height:20px}
+.mut{color:var(--mut)}.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+.res{font-size:16px;font-weight:600;padding:10px 12px;border-radius:10px;background:var(--bg);margin-top:10px}
+.faces{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.faces div{position:relative}.faces img{width:72px;height:72px;border-radius:8px;display:block}
+.faces button{position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;border:0;background:var(--bad);color:#fff;font-size:12px;line-height:20px;padding:0;cursor:pointer}
+pre{white-space:pre-wrap;word-break:break-all;background:var(--bg);padding:8px;border-radius:8px;font-size:12px;margin:6px 0}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:6px;border-bottom:1px solid var(--line)}
+.hide{display:none}.sp{flex:1}
+.big{font-size:40px;font-weight:700;text-align:center;padding:16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Doorface</h1>
+  <span id="cModel" class="chip">모델</span>
+  <span id="cMqtt" class="chip">MQTT</span>
+  <span class="sp"></span>
+  <label class="row" style="gap:6px;font-size:13px">자동 열기 <input type="checkbox" id="autoOpen"></label>
+</header>
+<nav id="nav">
+  <button data-t="test" class="on">테스트</button>
+  <button data-t="people">사람</button>
+  <button data-t="enroll">등록 촬영</button>
+  <button data-t="settings">설정</button>
+  <button data-t="log">기록</button>
+</nav>
+<main>
+
+<!-- 테스트 -->
+<section id="t-test">
+  <div class="card">
+    <h2>인식 테스트 <span class="mut" style="font-weight:400">— 문은 열지 않고 점수만 봅니다</span></h2>
+    <div class="row">
+      <label class="f">시작 전 대기<select id="tDelay"><option value="0">바로</option><option value="5">5초</option><option value="10" selected>10초</option><option value="20">20초</option></select></label>
+      <button class="btn pri" id="tStart">테스트 스캔</button>
+      <button class="btn" id="tCancel">중지</button>
+      <span class="sp"></span>
+      <button class="btn" id="tReal" title="설정대로 실제 판정(자동 열기 켜져 있으면 문 열림)">실제 스캔</button>
+    </div>
+    <div id="tCount" class="big hide"></div>
+    <div id="tRes" class="res hide"></div>
+  </div>
+  <div class="grid" id="tFrames"></div>
+</section>
+
+<!-- 사람 -->
+<section id="t-people" class="hide">
+  <div class="card">
+    <h2>사람 추가</h2>
+    <div class="row">
+      <input id="pName" placeholder="이름">
+      <select id="pPolicy"><option value="phone">얼굴 + 폰 근접</option><option value="strict">얼굴 단독 (엄격)</option></select>
+      <button class="btn pri" id="pAdd">추가</button>
+    </div>
+    <p class="mut" style="margin:8px 0 0">사진은 <b>등록 촬영</b> 탭에서 도어카메라로 찍어 넣는 게 가장 정확합니다. 휴대폰 사진 업로드도 됩니다.</p>
+  </div>
+  <div id="pList"></div>
+</section>
+
+<!-- 등록 촬영 -->
+<section id="t-enroll" class="hide">
+  <div class="card">
+    <h2>도어카메라로 등록 사진 찍기</h2>
+    <div class="row">
+      <label class="f">시작 전 대기<select id="eDelay"><option value="5">5초</option><option value="10" selected>10초</option><option value="20">20초</option></select></label>
+      <label class="f">장수<select id="eN"><option>8</option><option selected>12</option><option>20</option></select></label>
+      <button class="btn pri" id="eStart">촬영 시작</button>
+      <button class="btn" id="eCancel">중지</button>
+    </div>
+    <div id="eCount" class="big hide"></div>
+    <p class="mut" style="margin:8px 0 0">카메라를 정면으로 보다가 고개를 조금씩 돌려 주세요. 선명한 정면 위주로 5~10장 고르면 됩니다.</p>
+  </div>
+  <div class="grid" id="eFrames"></div>
+  <div class="card" id="eAssign" style="margin-top:12px">
+    <div class="row">
+      <span>선택 <b id="eSel">0</b>장 →</span>
+      <select id="eWho"></select>
+      <input id="eNew" placeholder="새 사람 이름" class="hide">
+      <select id="eNewPol" class="hide"><option value="phone">얼굴 + 폰 근접</option><option value="strict">얼굴 단독 (엄격)</option></select>
+      <button class="btn pri" id="eSave">등록</button>
+    </div>
+  </div>
+</section>
+
+<!-- 설정 -->
+<section id="t-settings" class="hide">
+  <div class="card">
+    <h2>망고 연결 (SSH → adb → 월패드)</h2>
+    <div class="row">
+      <label class="f">망고 주소<input id="sHost" placeholder="192.168.0.x"></label>
+      <label class="f">포트<input id="sPort" type="number" style="width:80px"></label>
+      <label class="f">사용자<input id="sUser" style="width:90px"></label>
+      <button class="btn" id="sTest">연결 테스트</button>
+    </div>
+    <p class="mut" style="margin:10px 0 4px">이 애드온의 공개키를 망고의 <code>/etc/dropbear/authorized_keys</code>에 한 줄 추가하세요.</p>
+    <pre id="sKey"></pre>
+    <button class="btn" id="sCopy">공개키 복사</button>
+    <pre id="sTestOut" class="hide"></pre>
+  </div>
+  <div class="card">
+    <h2>판정 기준</h2>
+    <div id="sMatch"></div>
+  </div>
+  <div class="card">
+    <h2>캡처</h2>
+    <div id="sCap"></div>
+  </div>
+  <div class="card">
+    <h2>문 열기</h2>
+    <div class="row">
+      <label class="f">판정 시 실행할 HA 엔티티(스크립트)<input id="sScript" style="width:280px" placeholder="script.doorface_open"></label>
+    </div>
+    <p class="mut" style="margin:8px 0 0">스크립트에는 <code>person</code>, <code>similarity</code> 변수가 전달됩니다. RS485 열기와 재시도는 스크립트에서 처리하세요.</p>
+  </div>
+  <div class="card">
+    <h2>튜닝용 저장</h2>
+    <label class="row"><input type="checkbox" id="sTune"> 실제 스캔 프레임을 7일간 저장 (기준 맞추는 기간에만)</label>
+    <div class="row" style="margin-top:8px"><span class="mut" id="sTuneInfo"></span><button class="btn danger" id="sTuneClr">저장분 모두 삭제</button></div>
+  </div>
+  <div class="row"><button class="btn pri" id="sSave">설정 저장</button><span id="sSaved" class="ok"></span></div>
+</section>
+
+<!-- 기록 -->
+<section id="t-log" class="hide">
+  <div class="card">
+    <h2>최근 기록 <span class="mut" style="font-weight:400">— 사진은 남기지 않습니다</span></h2>
+    <table><thead><tr><th>시각</th><th>모드</th><th>결과</th><th>사람</th><th>유사도</th><th>프레임/초</th></tr></thead><tbody id="lBody"></tbody></table>
+  </div>
+</section>
+</main>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const api=async(p,o={})=>{const r=await fetch('api/'+p,{headers:{'Content-Type':'application/json'},...o,body:o.body&&typeof o.body!=='string'&&!(o.body instanceof FormData)?JSON.stringify(o.body):o.body});
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||j.error||r.status);return j};
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let ST=null, PEOPLE=[], tab='test';
+const RES={match:'인식 성공',no_match:'일치하는 사람 없음',no_face:'얼굴 없음',phone_missing:'얼굴 일치 · 폰 근접 미확인',no_people:'등록된 사람 없음',error:'오류',enroll:'촬영 완료'};
+
+$$('#nav button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;$$('#nav button').forEach(x=>x.classList.toggle('on',x===b));
+  $$('main>section').forEach(s=>s.classList.toggle('hide',s.id!=='t-'+tab));
+  if(tab==='people')loadPeople();if(tab==='log')loadLog();if(tab==='settings')fillSettings();if(tab==='enroll')fillWho()});
+
+async function loadStatus(){try{ST=await api('status');
+  const m=$('#cModel');m.textContent=ST.model_state+(ST.mock?' · 모의':'');m.className='chip '+(ST.model_state==='준비됨'?'ok':ST.model_state.includes('오류')?'bad':'warn');
+  const q=$('#cMqtt');q.textContent='MQTT '+(ST.mqtt?'연결':'끊김');q.className='chip '+(ST.mqtt?'ok':'bad');
+  $('#autoOpen').checked=ST.settings.door.auto_open;}catch(e){}}
+$('#autoOpen').onchange=async e=>{await api('settings',{method:'POST',body:{door:{auto_open:e.target.checked}}});loadStatus()};
+
+/* ---------- 스캔 공통 ---------- */
+let poll=null;
+async function startScan(mode,delay,frames,box,countEl,resEl){
+  box.innerHTML='';resEl&&resEl.classList.add('hide');
+  try{await api('scan',{method:'POST',body:{mode,delay:+delay,frames:frames?+frames:undefined}})}catch(e){alert(e.message);return}
+  let since=0;clearInterval(poll);
+  poll=setInterval(async()=>{const s=await api('scan/session?since='+since);if(!s.id)return;
+    if(s.countdown>0){countEl.textContent=s.countdown;countEl.classList.remove('hide')}else countEl.classList.add('hide');
+    s.frames.forEach(f=>box.appendChild(mode==='enroll'?enrollCard(f):frameCard(f)));since=s.total;
+    if(mode==='enroll')updSel();
+    if(s.state==='done'){clearInterval(poll);countEl.classList.add('hide');if(resEl)showRes(resEl,s.result);loadStatus()}},500)}
+function frameCard(f){const d=document.createElement('div');
+  d.className='fr '+(f.pass?'pass':f.sim!=null?'fail':'');
+  let m=`<b>#${f.i}</b> <span class="mut">${f.t}s</span><br>`;
+  if(!f.face)m+='<span class="mut">얼굴 없음</span>';
+  else{const q=f.q;m+=f.best?`${esc(f.best)} <b class="${f.pass?'ok':'bad'}">${f.sim}</b> <span class="mut">/ ${f.thr}</span><br>`:'<span class="mut">비교 대상 없음</span><br>';
+    m+=`<span class="mut">${q.size}px · 정면 ${q.yaw} · 선명 ${Math.round(q.sharp)}</span>`;
+    if(f.quality_ok===false)m+='<br><span class="warn">품질 미달</span>';
+    if(f.streak)m+=` <span class="ok">연속 ${f.streak}</span>`;if(f.phone)m+=`<br><span class="mut">${esc(f.phone)}</span>`}
+  d.innerHTML=(f.thumb?`<img src="${f.thumb}">`:'')+`<div class="m">${m}</div>`;return d}
+function showRes(el,r){el.classList.remove('hide');const ok=r.result==='match';
+  let t=`<span class="${ok?'ok':r.result==='error'?'bad':'warn'}">${RES[r.result]||r.result}</span>`;
+  if(ok)t+=` — ${esc(r.person)} (${r.sim}, 연속 ${r.streak})`+(r.mode==='test'?' <span class="mut">· 테스트라 문은 안 엶</span>':r.opened?' · 문 열림':'');
+  else if(r.best&&r.best.name)t+=` <span class="mut">최고 ${esc(r.best.name)} ${r.best.sim}</span>`;
+  if(r.detail)t+=` <span class="mut">${esc(r.detail)}</span>`;
+  t+=` <span class="mut" style="font-weight:400">· ${r.frames}장 / ${r.duration}초</span>`;el.innerHTML=t}
+
+$('#tStart').onclick=()=>startScan('test',$('#tDelay').value,null,$('#tFrames'),$('#tCount'),$('#tRes'));
+$('#tReal').onclick=()=>{if(confirm('실제 판정으로 스캔합니다. 자동 열기가 켜져 있으면 문이 열립니다.'))startScan('auto',$('#tDelay').value,null,$('#tFrames'),$('#tCount'),$('#tRes'))};
+$('#tCancel').onclick=$('#eCancel').onclick=()=>api('scan/cancel',{method:'POST'});
+
+/* ---------- 등록 촬영 ---------- */
+function enrollCard(f){const d=document.createElement('div');d.className='fr';
+  if(!f.cid){d.innerHTML=(f.thumb?`<img src="${f.thumb}">`:'')+`<div class="m mut">#${f.i} 얼굴 없음</div>`;return d}
+  const q=f.q,good=f.quality_ok&&q.sharp>120;d.dataset.cid=f.cid;
+  d.innerHTML=`<input type="checkbox" class="ck" ${good?'checked':''}><img src="${f.crop}"><div class="m"><b>#${f.i}</b> ${q.size}px<br><span class="mut">정면 ${q.yaw} · 선명 ${Math.round(q.sharp)}</span>${f.quality_ok?'':'<br><span class="warn">품질 미달</span>'}</div>`;
+  d.querySelector('.ck').onchange=updSel;d.onclick=e=>{if(e.target.tagName!=='INPUT'){const c=d.querySelector('.ck');c.checked=!c.checked;updSel()}};return d}
+function updSel(){const n=$$('#eFrames .ck').filter(c=>{c.closest('.fr').classList.toggle('sel',c.checked);return c.checked}).length;$('#eSel').textContent=n}
+async function fillWho(){PEOPLE=await api('people');const s=$('#eWho'),v=s.value;
+  s.innerHTML=PEOPLE.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')+'<option value="__new">+ 새 사람</option>';
+  if(v)s.value=v;s.onchange();}
+$('#eWho').onchange=()=>{const n=$('#eWho').value==='__new';$('#eNew').classList.toggle('hide',!n);$('#eNewPol').classList.toggle('hide',!n)};
+$('#eStart').onclick=()=>startScan('enroll',$('#eDelay').value,$('#eN').value,$('#eFrames'),$('#eCount'),null);
+$('#eSave').onclick=async()=>{const cids=$$('#eFrames .ck').filter(c=>c.checked).map(c=>c.closest('.fr').dataset.cid);
+  if(!cids.length)return alert('사진을 선택하세요');let pid=$('#eWho').value;
+  if(pid==='__new'){const n=$('#eNew').value.trim();if(!n)return alert('이름을 입력하세요');pid=(await api('people',{method:'POST',body:{name:n,policy:$('#eNewPol').value}})).id}
+  try{const r=await api(`people/${pid}/samples`,{method:'POST',body:{cids}});alert(r.added.length+'장 등록됨');$('#eFrames').innerHTML='';updSel();fillWho();loadStatus()}catch(e){alert(e.message)}};
+
+/* ---------- 사람 ---------- */
+async function loadPeople(){PEOPLE=await api('people');const box=$('#pList');box.innerHTML='';
+  if(!PEOPLE.length)box.innerHTML='<div class="card mut">등록된 사람이 없습니다.</div>';
+  PEOPLE.forEach(p=>{const c=document.createElement('div');c.className='card';
+    c.innerHTML=`<div class="row"><input class="nm" value="${esc(p.name)}" style="font-weight:600;width:140px">
+      <select class="pol"><option value="phone">얼굴 + 폰 근접</option><option value="strict">얼굴 단독 (엄격)</option></select>
+      <label class="row" style="gap:4px"><input type="checkbox" class="en" ${p.enabled?'checked':''}>사용</label><span class="sp"></span>
+      <label class="btn">사진 업로드<input type="file" accept="image/*" class="up hide"></label><button class="btn danger del">삭제</button></div>
+      <div class="row ph" style="margin-top:8px"><label class="f">폰 근접 엔티티<input class="pe" value="${esc(p.phone_entity)}" placeholder="sensor.my_iphone_ble" style="width:220px"></label>
+      <label class="f">통과 상태값(쉼표 구분)<input class="ps" value="${esc(p.phone_states)}" style="width:160px"></label></div>
+      <div class="faces">${p.samples.map(s=>`<div><img src="api/faces/${s.file}" title="${s.q.size}px"><button data-s="${s.id}">×</button></div>`).join('')||'<span class="mut">사진 없음</span>'}</div>`;
+    const pol=c.querySelector('.pol');pol.value=p.policy;c.querySelector('.ph').classList.toggle('hide',p.policy==='strict');
+    const save=async patch=>{await api('people/'+p.id,{method:'PATCH',body:patch});loadStatus()};
+    c.querySelector('.nm').onchange=e=>save({name:e.target.value});
+    pol.onchange=e=>{save({policy:e.target.value});c.querySelector('.ph').classList.toggle('hide',e.target.value==='strict')};
+    c.querySelector('.en').onchange=e=>save({enabled:e.target.checked});
+    c.querySelector('.pe').onchange=e=>save({phone_entity:e.target.value.trim()});
+    c.querySelector('.ps').onchange=e=>save({phone_states:e.target.value});
+    c.querySelector('.del').onclick=async()=>{if(confirm(p.name+' 님과 사진을 모두 삭제할까요?')){await api('people/'+p.id,{method:'DELETE'});loadPeople();loadStatus()}};
+    c.querySelector('.up').onchange=async e=>{const fd=new FormData();fd.append('file',e.target.files[0]);
+      try{await api(`people/${p.id}/upload`,{method:'POST',body:fd,headers:{}});loadPeople();loadStatus()}catch(er){alert(er.message)}};
+    c.querySelectorAll('.faces button').forEach(b=>b.onclick=async()=>{await api(`people/${p.id}/samples/${b.dataset.s}`,{method:'DELETE'});loadPeople();loadStatus()});
+    box.appendChild(c)})}
+$('#pAdd').onclick=async()=>{const n=$('#pName').value.trim();if(!n)return;await api('people',{method:'POST',body:{name:n,policy:$('#pPolicy').value}});$('#pName').value='';loadPeople();loadStatus()};
+
+/* ---------- 설정 ---------- */
+const MATCH=[['thr_phone','얼굴+폰: 유사도 기준',.3,.8,.01],['consec_phone','얼굴+폰: 연속 일치 프레임',1,6,1],
+  ['thr_strict','얼굴 단독: 유사도 기준',.4,.9,.01],['consec_strict','얼굴 단독: 연속 일치 프레임',1,10,1],
+  ['min_margin','1등-2등 사람 최소 차이',0,.3,.01],['min_face','얼굴 최소 크기(px)',40,200,5],
+  ['max_yaw','정면도 한계(좌우, 0=정면)',.1,.8,.01],['max_pitch','정면도 한계(상하)',.1,.8,.01]];
+const CAP=[['warmup','호출 후 영상 대기(초)',0,5,1],['window_sec','판정 창(초)',4,30,1],['max_frames','최대 프레임',5,60,1]];
+function sliders(el,defs,vals,key){el.innerHTML=defs.map(([k,l,a,b,s])=>`<div class="row" style="margin:6px 0"><span style="width:210px">${l}</span>
+  <input type="range" min="${a}" max="${b}" step="${s}" value="${vals[k]}" data-g="${key}" data-k="${k}"><b style="width:46px" id="v-${key}-${k}">${vals[k]}</b></div>`).join('');
+  el.querySelectorAll('input').forEach(i=>i.oninput=()=>$(`#v-${key}-${i.dataset.k}`).textContent=i.value)}
+async function fillSettings(){await loadStatus();const s=ST.settings;
+  $('#sHost').value=s.mango.host;$('#sPort').value=s.mango.port;$('#sUser').value=s.mango.user;$('#sKey').textContent=ST.pubkey;
+  sliders($('#sMatch'),MATCH,s.match,'match');sliders($('#sCap'),CAP,s.capture,'capture');
+  $('#sScript').value=s.door.script;$('#sTune').checked=s.tuning_save;
+  const t=await api('tuning');$('#sTuneInfo').textContent=`저장된 스캔 ${t.sessions}건`}
+$('#sSave').onclick=async()=>{const p={mango:{host:$('#sHost').value.trim(),port:+$('#sPort').value||22,user:$('#sUser').value.trim()||'root'},
+  match:{},capture:{},door:{script:$('#sScript').value.trim()},tuning_save:$('#sTune').checked};
+  $$('#t-settings input[type=range]').forEach(i=>p[i.dataset.g][i.dataset.k]=+i.value);
+  await api('settings',{method:'POST',body:p});$('#sSaved').textContent='저장됨';setTimeout(()=>$('#sSaved').textContent='',1500);loadStatus()};
+$('#sTest').onclick=async()=>{await $('#sSave').onclick();const o=$('#sTestOut');o.classList.remove('hide');o.textContent='확인 중...';
+  const r=await api('mango/test',{method:'POST'});o.textContent=(r.ok?'✅ 연결 성공\n':'❌ 실패\n')+r.detail};
+$('#sCopy').onclick=()=>navigator.clipboard.writeText($('#sKey').textContent).then(()=>alert('복사됨'));
+$('#sTuneClr').onclick=async()=>{if(confirm('튜닝용으로 저장된 프레임을 모두 지울까요?')){await api('tuning/clear',{method:'POST'});fillSettings()}};
+
+/* ---------- 기록 ---------- */
+async function loadLog(){const ev=await api('events');$('#lBody').innerHTML=ev.map(e=>`<tr><td>${new Date(e.ts*1000).toLocaleString()}</td>
+  <td>${{auto:'실제',test:'테스트'}[e.mode]||e.mode}${e.trigger&&e.trigger!=='ui'?' <span class="mut">'+esc(e.trigger)+'</span>':''}</td>
+  <td class="${e.result==='match'?'ok':e.result==='error'?'bad':''}">${RES[e.result]||e.result}${e.opened?' · 열림':''}</td>
+  <td>${esc(e.person||(e.best&&e.best.name)||'')}</td><td>${e.sim??(e.best?e.best.sim:'')}</td><td>${e.frames}/${e.duration}</td></tr>`).join('')||'<tr><td colspan=6 class="mut">기록 없음</td></tr>'}
+
+loadStatus();setInterval(loadStatus,5000);
+</script>
+</body>
+</html>
