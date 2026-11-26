@@ -174,7 +174,7 @@ $$('#nav button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;$$('#nav button').fo
   if(tab==='people')loadPeople();if(tab==='log')loadLog();if(tab==='settings')fillSettings();if(tab==='enroll')fillWho()});
 
 async function loadStatus(){try{ST=await api('status');
-  const m=$('#cModel');m.textContent=ST.model_state+(ST.mock?' · 모의':'');m.className='chip '+(ST.model_state==='준비됨'?'ok':ST.model_state.includes('오류')?'bad':'warn');
+  const m=$('#cModel');m.textContent=ST.model_state+(ST.mock?' · 모의':'')+(ST.bench?` · 검출 ${ST.bench.det320}ms 인식 ${ST.bench.rec}ms`:'');m.className='chip '+(ST.model_state==='준비됨'?'ok':ST.model_state.includes('오류')?'bad':'warn');
   $('#cRetry').classList.toggle('hide',!ST.model_state.includes('오류'));
   const q=$('#cMqtt');q.textContent='MQTT '+(ST.mqtt?'연결':'끊김');q.className='chip '+(ST.mqtt?'ok':'bad');
   $('#autoOpen').checked=ST.settings.door.auto_open;}catch(e){}}
@@ -186,15 +186,16 @@ let poll=null;
 async function startScan(mode,delay,frames,box,countEl,resEl){
   box.innerHTML='';resEl&&resEl.classList.add('hide');
   try{await api('scan',{method:'POST',body:{mode,delay:+delay,frames:frames?+frames:undefined}})}catch(e){alert(e.message);return}
-  let since=0;clearInterval(poll);
-  poll=setInterval(async()=>{const s=await api('scan/session?since='+since);if(!s.id)return;
+  let since=0,busy=false;const seen=new Set();clearInterval(poll);
+  poll=setInterval(async()=>{if(busy)return;busy=true;let s;try{s=await api('scan/session?since='+since)}finally{busy=false}if(!s||!s.id)return;
     if(s.countdown>0){countEl.textContent=s.countdown;countEl.classList.remove('hide')}else countEl.classList.add('hide');
-    s.frames.forEach(f=>box.appendChild(mode==='enroll'?enrollCard(f):frameCard(f)));since=s.total;
+    s.frames.forEach(f=>{if(seen.has(f.i))return;seen.add(f.i);box.appendChild(mode==='enroll'?enrollCard(f):frameCard(f))});since=s.total;
+    if(s.capture&&resEl&&s.state!=='done'){resEl.classList.remove('hide');resEl.innerHTML=capLine(s.capture,true)}
     if(mode==='enroll')updSel();
     if(s.state==='done'){clearInterval(poll);countEl.classList.add('hide');if(resEl)showRes(resEl,s.result);loadStatus()}},500)}
 function frameCard(f){const d=document.createElement('div');
   d.className='fr '+(f.pass?'pass':f.sim!=null?'fail':'');
-  let m=`<b>#${f.i}</b> <span class="mut">${f.t}s</span><br>`;
+  let m=`<b>#${f.i}</b> <span class="mut">${f.t}s · 캡처 ${f.cap??'-'}s · 처리 ${f.proc??'-'}s</span><br>`;
   if(!f.face)m+='<span class="mut">얼굴 없음</span>';
   else{const q=f.q;m+=f.best?`${esc(f.best)} <b class="${f.pass?'ok':'bad'}">${f.sim}</b> <span class="mut">/ ${f.thr}</span><br>`:'<span class="mut">비교 대상 없음</span><br>';
     m+=`<span class="mut">${q.size}px · 정면 ${q.yaw} · 선명 ${Math.round(q.sharp)}</span>`;
@@ -206,7 +207,9 @@ function showRes(el,r){el.classList.remove('hide');const ok=r.result==='match';
   if(ok)t+=` — ${esc(r.person)} (${r.sim}, 연속 ${r.streak})`+(r.mode==='test'?' <span class="mut">· 테스트라 문은 안 엶</span>':r.opened?' · 문 열림':'');
   else if(r.best&&r.best.name)t+=` <span class="mut">최고 ${esc(r.best.name)} ${r.best.sim}</span>`;
   if(r.detail)t+=` <span class="mut">${esc(r.detail)}</span>`;
-  t+=` <span class="mut" style="font-weight:400">· ${r.frames}장 / ${r.duration}초</span>`;el.innerHTML=t}
+  t+=` <span class="mut" style="font-weight:400">· ${r.frames}장 / ${r.duration}초</span>`;
+  if(r.capture)t+='<br>'+capLine(r.capture);el.innerHTML=t}
+function capLine(c,live){const n=c.ok+c.empty+c.partial;return `<span class="mut" style="font-size:13px;font-weight:400">${live?'촬영 중 · ':''}캡처 ${n}회 (정상 ${c.ok} · 실패 ${c.empty} · 잘림 ${c.partial}${c.dropped?' · 건너뜀 '+c.dropped:''}) · 장당 ${n?(c.cap_sum/n).toFixed(2):'-'}초 · 첫 정상 프레임 ${c.first_at??'-'}초</span>`}
 
 $('#tStart').onclick=()=>startScan('test',$('#tDelay').value,null,$('#tFrames'),$('#tCount'),$('#tRes'));
 $('#tReal').onclick=()=>{if(confirm('실제 판정으로 스캔합니다. 자동 열기가 켜져 있으면 문이 열립니다.'))startScan('auto',$('#tDelay').value,null,$('#tFrames'),$('#tCount'),$('#tRes'))};
@@ -258,7 +261,8 @@ $('#pAdd').onclick=async()=>{const n=$('#pName').value.trim();if(!n)return;await
 const MATCH=[['thr_phone','얼굴+폰: 유사도 기준',.3,.8,.01],['consec_phone','얼굴+폰: 연속 일치 프레임',1,6,1],
   ['thr_strict','얼굴 단독: 유사도 기준',.4,.9,.01],['consec_strict','얼굴 단독: 연속 일치 프레임',1,10,1],
   ['min_margin','1등-2등 사람 최소 차이',0,.3,.01],['min_face','얼굴 최소 크기(px)',40,200,5],
-  ['max_yaw','정면도 한계(좌우, 0=정면)',.1,.8,.01],['max_pitch','정면도 한계(상하)',.1,.8,.01]];
+  ['max_yaw','정면도 한계(좌우, 0=정면)',.1,.8,.01],['max_pitch','정면도 한계(상하)',.1,.8,.01],
+  ['det_size','검출 입력 크기(작을수록 빠름)',320,640,160]];
 const CAP=[['warmup','호출 후 영상 대기(초)',0,5,1],['window_sec','판정 창(초)',4,30,1],['max_frames','최대 프레임',5,60,1]];
 function sliders(el,defs,vals,key){el.innerHTML=defs.map(([k,l,a,b,s])=>`<div class="row" style="margin:6px 0"><span style="width:210px">${l}</span>
   <input type="range" min="${a}" max="${b}" step="${s}" value="${vals[k]}" data-g="${key}" data-k="${k}"><b style="width:46px" id="v-${key}-${k}">${vals[k]}</b></div>`).join('');

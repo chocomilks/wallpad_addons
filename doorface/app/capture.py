@@ -10,6 +10,7 @@ import base64
 import glob
 import logging
 import os
+import time
 from typing import AsyncIterator
 
 log = logging.getLogger("doorface.capture")
@@ -40,12 +41,21 @@ def remote_script(frames: int, warmup: int, call: bool) -> str:
             "adb shell 'am broadcast -a com.commax.sipua.NEW_OUTGOING_CALL "
             "--es android.intent.extra.PHONE_NUMBER \"#201\"' >/dev/null 2>&1")
         lines.append(f"sleep {int(warmup)}")
+    # 월패드 쪽 명령은 작은따옴표로 감싸 망고 셸이 $를 풀지 않게 하고, $REQ만 망고에서 끼워 넣음.
+    # cmxmm이 파일을 다 쓸 때까지(크기가 멈출 때까지) 기다린 뒤 base64로 내보냄 — 덜 써진 JPEG 방지.
+    f = REMOTE_FILE
+    wall = (
+        "busybox base64 -d | busybox nc -w 3 127.0.0.1 %d >/dev/null; "
+        "k=0; while [ $k -lt 15 ]; do a=$(busybox stat -c %%s %s 2>/dev/null); "
+        "busybox usleep 40000 2>/dev/null; b=$(busybox stat -c %%s %s 2>/dev/null); "
+        '[ -n "$a" ] && [ "$a" = "$b" ] && [ "$a" -gt 0 ] && break; k=$((k+1)); done; '
+        "busybox base64 %s 2>/dev/null; busybox rm -f %s"
+    ) % (CMXMM_PORT, f, f, f, f)
     lines += [
         "i=0",
         f"while [ $i -lt {int(frames)} ]; do",
         '  echo "@@F $i"',
-        f'  adb shell "echo $REQ | busybox base64 -d | busybox nc -w 5 127.0.0.1 {CMXMM_PORT} >/dev/null; '
-        f'busybox base64 {REMOTE_FILE} 2>/dev/null; busybox rm -f {REMOTE_FILE}"',
+        "  adb shell 'echo '\"$REQ\"' | " + wall + "'",
         '  echo "@@E $i"',
         "  i=$((i+1))",
         "done",
@@ -109,7 +119,8 @@ class Capturer:
         return {"ok": ok, "detail": text.strip()[-800:]}
 
     # ---------- 프레임 스트림 ----------
-    async def frames(self, n: int, warmup: int, call: bool = True) -> AsyncIterator[bytes]:
+    async def frames(self, n: int, warmup: int, call: bool = True) -> AsyncIterator[dict]:
+        """{"jpg": bytes|None, "status": ok|empty|partial, "cap": 캡처 소요(s), "at": 시작 후 도착(s)}"""
         if self.mock_dir:
             async for b in self._mock(n, warmup):
                 yield b
@@ -122,6 +133,8 @@ class Capturer:
         await p.stdin.drain()
         p.stdin.close()
         buf: list[str] | None = None
+        t0 = time.time()
+        tf = t0
         try:
             while True:
                 line = await asyncio.wait_for(p.stdout.readline(), warmup + 20)
@@ -130,6 +143,7 @@ class Capturer:
                 s = line.decode(errors="replace").strip()
                 if s.startswith("@@F"):
                     buf = []
+                    tf = time.time()
                 elif s.startswith("@@E"):
                     data = b""
                     try:
@@ -137,10 +151,14 @@ class Capturer:
                     except Exception:  # noqa: BLE001
                         pass
                     buf = None
-                    if data[:2] == b"\xff\xd8":
-                        yield data
+                    now = time.time()
+                    info = {"cap": round(now - tf, 2), "at": round(now - t0, 2)}
+                    if data[:2] != b"\xff\xd8":
+                        yield {**info, "jpg": None, "status": "empty"}
+                    elif data[-2:] != b"\xff\xd9":
+                        yield {**info, "jpg": None, "status": "partial"}
                     else:
-                        log.debug("빈 프레임(캡처 실패)")
+                        yield {**info, "jpg": data, "status": "ok"}
                 elif s.startswith("@@DONE"):
                     break
                 elif buf is not None and s:
@@ -159,10 +177,11 @@ class Capturer:
 
     async def _mock(self, n, warmup):
         files = sorted(glob.glob(os.path.join(self.mock_dir, "*.jp*g")))
+        t0 = time.time()
         await asyncio.sleep(min(warmup, 1))
         for i in range(n):
             if not files:
                 return
             await asyncio.sleep(0.35)
             with open(files[i % len(files)], "rb") as f:
-                yield f.read()
+                yield {"jpg": f.read(), "status": "ok", "cap": 0.35, "at": round(time.time() - t0, 2)}

@@ -74,7 +74,8 @@ class Scanner:
                 log.exception("스캔 실패")
                 result = {"result": "error", "detail": str(e)}
             result.update({"mode": mode, "trigger": trigger, "frames": len(sess["frames"]),
-                           "duration": round(time.time() - sess["started"], 2)})
+                           "duration": round(time.time() - sess["started"], 2),
+                           "capture": sess.get("capture")})
             sess["result"], sess["state"] = result, "done"
             if mode != "enroll":
                 self.s.events.add(result)
@@ -88,14 +89,25 @@ class Scanner:
         q: asyncio.Queue = asyncio.Queue(maxsize=0 if mode == "enroll" else 2)
         t0 = time.time()
 
+        stats = {"ok": 0, "empty": 0, "partial": 0, "dropped": 0, "first_at": None, "cap_sum": 0.0}
+        sess["capture"] = stats
+        hard_limit = cap["warmup"] + cap["window_sec"] + 15   # 첫 프레임이 영영 안 와도 여기서 끝
+
         async def producer():
             try:
-                async for jpg in self.s.capturer.frames(n, int(cap["warmup"])):
-                    if self._cancel or time.time() - t0 > cap["window_sec"] + cap["warmup"] + 5:
+                async for fr in self.s.capturer.frames(n, int(cap["warmup"])):
+                    stats[fr["status"]] += 1
+                    stats["cap_sum"] = round(stats["cap_sum"] + fr["cap"], 2)
+                    if self._cancel or time.time() - t0 > hard_limit:
                         break
+                    if fr["jpg"] is None:
+                        continue
+                    if stats["first_at"] is None:
+                        stats["first_at"] = round(time.time() - t0, 2)
                     if q.full():          # 분석이 밀리면 오래된 프레임 버림
                         q.get_nowait()
-                    await q.put(jpg)
+                        stats["dropped"] += 1
+                    await q.put(fr)
             finally:
                 if q.full():
                     q.get_nowait()
@@ -114,17 +126,23 @@ class Scanner:
         idx = 0
         try:
             while True:
-                jpg = await q.get()
-                if jpg is None or self._cancel:
+                item = await q.get()
+                if item is None or self._cancel:
                     break
-                if mode != "enroll" and time.time() - t0 > cap["warmup"] + cap["window_sec"]:
-                    break   # 판정 창 종료
+                # 판정 창은 첫 정상 프레임 도착부터 계산 (호출·영상 준비 시간은 제외)
+                if mode != "enroll" and stats["first_at"] is not None and \
+                        time.time() - t0 - stats["first_at"] > cap["window_sec"]:
+                    break
+                jpg = item["jpg"]
                 idx += 1
                 img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
                 if img is None:
+                    stats["partial"] += 1
                     continue
-                faces = await asyncio.to_thread(self.s.engine.analyze, img)
-                fr = {"i": idx, "t": round(time.time() - t0, 2), "face": bool(faces)}
+                ta = time.time()
+                faces = await asyncio.to_thread(self.s.engine.analyze, img, m.get("det_size", 320))
+                fr = {"i": idx, "t": round(time.time() - t0, 2), "face": bool(faces),
+                      "cap": item["cap"], "proc": round(time.time() - ta, 2)}
                 if tuning_dir:
                     with open(os.path.join(tuning_dir, f"{idx:02d}.jpg"), "wb") as f:
                         f.write(jpg)

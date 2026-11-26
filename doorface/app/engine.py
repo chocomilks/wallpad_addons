@@ -31,7 +31,7 @@ class Face:
 
 def _session(path: str) -> ort.InferenceSession:
     so = ort.SessionOptions()
-    so.intra_op_num_threads = max(1, (os.cpu_count() or 2) - 1)
+    so.intra_op_num_threads = max(1, os.cpu_count() or 2)
     so.log_severity_level = 3
     return ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
 
@@ -141,9 +141,28 @@ class Engine:
         self.det = SCRFD(os.path.join(model_dir, det_name))
         self.rec = ArcFace(os.path.join(model_dir, rec_name))
         self.lock = threading.Lock()
+        self.bench = {}
 
-    def analyze(self, img: np.ndarray, det_thresh=0.5, max_faces=1) -> list[Face]:
+    def warmup(self):
+        """첫 추론 지연을 미리 소모하고 장당 소요시간을 측정."""
+        import time
+        img = np.full((480, 720, 3), 128, np.uint8)
+        face = np.full((112, 112, 3), 128, np.uint8)
+        for _ in range(2):
+            for sz in (320, 640):
+                self.det.input_size = (sz, sz)
+                t = time.time()
+                self.det.detect(img)
+                self.bench[f"det{sz}"] = int((time.time() - t) * 1000)
+            t = time.time()
+            self.rec.embed([face])
+            self.bench["rec"] = int((time.time() - t) * 1000)
+        self.bench["threads"] = os.cpu_count()
+        return self.bench
+
+    def analyze(self, img: np.ndarray, det_size=320, det_thresh=0.5, max_faces=1) -> list[Face]:
         with self.lock:
+            self.det.input_size = (int(det_size), int(det_size))
             faces = self.det.detect(img, det_thresh, max_faces)
             if not faces:
                 return []
