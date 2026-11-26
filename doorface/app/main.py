@@ -67,20 +67,80 @@ class State:
     def _model_dir(self):
         return os.environ.get("DOORFACE_MODEL_DIR") or os.path.join(DATA, "models", self.pack)
 
+    def start_load(self):
+        """모델 다운로드/로드를 백그라운드로 시작 (이미 진행 중이면 무시)."""
+        if self.engine is not None or getattr(self, "_loading", False):
+            return False
+        self._loading = True
+
+        async def run():
+            try:
+                await asyncio.to_thread(self.load_model)
+            except Exception as e:  # noqa: BLE001
+                self.model_state = f"모델 오류: {e}"
+                log.exception("모델 로드 실패")
+            finally:
+                self._loading = False
+        asyncio.create_task(run())
+        return True
+
+    def _download(self, url, dst, tries=8):
+        """끊기면 받은 데까지 이어받기(Range) + 재시도."""
+        total = None
+        for attempt in range(1, tries + 1):
+            have = os.path.getsize(dst) if os.path.exists(dst) else 0
+            if total and have >= total:
+                return
+            headers = {"User-Agent": "doorface-addon"}
+            if have:
+                headers["Range"] = f"bytes={have}-"
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    if have and r.status == 206:
+                        cr = r.headers.get("Content-Range", "")
+                        total = int(cr.split("/")[-1]) if "/" in cr else None
+                        mode = "ab"
+                    else:
+                        have, mode = 0, "wb"
+                        total = int(r.headers.get("Content-Length") or 0) or None
+                    with open(dst, mode) as f:
+                        while chunk := r.read(1 << 20):
+                            f.write(chunk)
+                            have += len(chunk)
+                            pct = f"{have * 100 // total}%" if total else f"{have >> 20}MB"
+                            self.model_state = f"모델 다운로드 중 {pct} ({self.pack})"
+                if total is None or have >= total:
+                    return
+            except Exception as e:  # noqa: BLE001
+                log.warning("모델 다운로드 끊김(%s) — 이어받기 재시도 %d/%d", e, attempt, tries)
+                self.model_state = f"다운로드 재시도 {attempt}/{tries}"
+                time.sleep(min(30, 3 * attempt))
+        raise RuntimeError("모델 다운로드 반복 실패 — 네트워크 확인 후 다시 시도")
+
     def load_model(self):
         d = self._model_dir()
         det, rec = PACKS[self.pack]
         if not (os.path.exists(os.path.join(d, det)) and os.path.exists(os.path.join(d, rec))):
-            self.model_state = f"모델 다운로드 중 ({self.pack}, 수백 MB)"
             os.makedirs(d, exist_ok=True)
             zp = os.path.join(d, "pack.zip.part")
-            urllib.request.urlretrieve(URL.format(self.pack), zp)
-            with zipfile.ZipFile(zp) as z:
-                for name in z.namelist():
-                    base = os.path.basename(name)
-                    if base in (det, rec):
-                        with z.open(name) as src, open(os.path.join(d, base), "wb") as dst:
-                            dst.write(src.read())
+            for attempt in range(1, 4):
+                self._download(URL.format(self.pack), zp)
+                try:
+                    with zipfile.ZipFile(zp) as z:
+                        for name in z.namelist():
+                            base = os.path.basename(name)
+                            if base in (det, rec):
+                                with z.open(name) as src, open(os.path.join(d, base) + ".tmp", "wb") as dst:
+                                    while chunk := src.read(1 << 20):
+                                        dst.write(chunk)
+                                os.replace(os.path.join(d, base) + ".tmp", os.path.join(d, base))
+                    break
+                except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError) as e:
+                    log.warning("모델 압축 파일 손상(%s) — 처음부터 다시 받음 (%d/3)", e, attempt)
+                    os.remove(zp)
+                    if attempt == 3:
+                        raise
             os.remove(zp)
         self.model_state = "모델 로딩 중"
         eng = Engine(d, det, rec)
@@ -144,13 +204,7 @@ async def lifespan(app):
     await S.capturer.ensure_key()
     loop = asyncio.get_running_loop()
 
-    async def load():
-        try:
-            await asyncio.to_thread(S.load_model)
-        except Exception as e:  # noqa: BLE001
-            S.model_state = f"모델 오류: {e}"
-            log.exception("모델 로드 실패")
-    asyncio.create_task(load())
+    S.start_load()
 
     mcfg = await ha.mqtt_service() if os.environ.get("SUPERVISOR_TOKEN") else None
     if mcfg:
@@ -201,6 +255,11 @@ async def set_settings(patch: dict):
     st = S.settings.update(patch)
     await S.publish_state()
     return st
+
+
+@app.post("/api/model/retry")
+async def model_retry():
+    return {"started": S.start_load(), "state": S.model_state}
 
 
 @app.post("/api/mango/test")
