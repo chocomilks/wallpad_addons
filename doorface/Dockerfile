@@ -1,5 +1,5 @@
-ARG BUILD_FROM
-FROM $BUILD_FROM
+# Supervisor의 BUILD_FROM(알파인)을 쓰지 않고 데비안 slim 고정 (onnxruntime 휠이 glibc 필요)
+FROM docker.io/library/python:3.13-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 LANG=C.UTF-8
 
