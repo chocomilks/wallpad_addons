@@ -200,7 +200,11 @@ function frameCard(f){const d=document.createElement('div');
   else{const q=f.q;m+=f.best?`${esc(f.best)} <b class="${f.pass?'ok':'bad'}">${f.sim}</b> <span class="mut">/ ${f.thr}</span><br>`:'<span class="mut">비교 대상 없음</span><br>';
     m+=`<span class="mut">${q.size}px · 정면 ${q.yaw} · 선명 ${Math.round(q.sharp)}</span>`;
     if(f.quality_ok===false)m+='<br><span class="warn">품질 미달</span>';
-    if(f.streak)m+=` <span class="ok">연속 ${f.streak}</span>`;if(f.phone)m+=`<br><span class="mut">${esc(f.phone)}</span>`}
+    if(f.faces&&f.faces.length>1)m+='<br>'+f.faces.map(x=>`<span class="${x.pass?'ok':x.qok?'bad':'mut'}">${'①②③④'[x.n-1]}${esc(x.best||'?')} ${x.sim}</span>`).join(' ');
+    const st=f.streaks?Object.entries(f.streaks):[];
+    if(st.length)m+='<br><span class="ok">연속 '+st.map(([n,c])=>esc(n)+' '+c).join(' · ')+'</span>';
+    else if(f.streak)m+=` <span class="ok">연속 ${f.streak}</span>`;
+    if(f.phone)m+=`<br><span class="mut">${esc(f.phone)}</span>`}
   d.innerHTML=(f.thumb?`<img src="${f.thumb}">`:'')+`<div class="m">${m}</div>`;return d}
 function showRes(el,r){el.classList.remove('hide');const ok=r.result==='match';
   let t=`<span class="${ok?'ok':r.result==='error'?'bad':'warn'}">${RES[r.result]||r.result}</span>`;

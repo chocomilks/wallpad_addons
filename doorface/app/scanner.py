@@ -29,6 +29,20 @@ def _data_url(b: bytes) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(b).decode()
 
 
+MAX_FACES = 4   # 한 프레임에서 판정할 최대 얼굴 수 (큰 순)
+
+
+def _annotate(img, faces, judged):
+    """테스트 화면용: 얼굴마다 상자와 번호 (초록=통과, 빨강=불일치, 회색=품질 미달)."""
+    out = img.copy()
+    for k, (f, j) in enumerate(zip(faces, judged)):
+        color = (60, 200, 60) if j["pass"] else ((60, 60, 220) if j["qok"] else (150, 150, 150))
+        x1, y1, x2, y2 = [int(v) for v in f.bbox]
+        cv2.rectangle(out, (x1, y1), (x2, y2), color, 3)
+        cv2.putText(out, str(k + 1), (x1 + 4, max(24, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+    return out
+
+
 class Scanner:
     def __init__(self, app_state):
         self.s = app_state          # engine/capturer/settings/people/events/notify
@@ -119,11 +133,14 @@ class Scanner:
             tuning_dir = os.path.join(self.s.data_dir, "tuning", time.strftime("%Y%m%d-%H%M%S"))
             os.makedirs(tuning_dir, exist_ok=True)
 
-        cur_pid, cnt = None, 0
+        streak: dict[str, int] = {}   # 사람별 연속 일치 횟수
+        miss: dict[str, int] = {}     # 사람별 연속 불일치 프레임 (1번까지 허용)
         best_seen = {"name": None, "sim": 0.0}
         phone_missing = None
         decision = None
         idx = 0
+        faces_max = 0
+        det_size = m.get("det_size", 320)
         try:
             while True:
                 item = await q.get()
@@ -140,24 +157,25 @@ class Scanner:
                     stats["partial"] += 1
                     continue
                 ta = time.time()
-                faces = await asyncio.to_thread(self.s.engine.analyze, img, m.get("det_size", 320))
+                faces = await asyncio.to_thread(self.s.engine.analyze, img, det_size, 0.5,
+                                                1 if mode == "enroll" else MAX_FACES)
                 fr = {"i": idx, "t": round(time.time() - t0, 2), "face": bool(faces),
                       "cap": item["cap"], "proc": round(time.time() - ta, 2)}
+                faces_max = max(faces_max, len(faces))
                 if tuning_dir:
                     with open(os.path.join(tuning_dir, f"{idx:02d}.jpg"), "wb") as f:
                         f.write(jpg)
-                if mode in ("test", "enroll"):
-                    fr["thumb"] = _data_url(_jpg(img, 320, 80))
                 if not faces:
+                    if mode in ("test", "enroll"):
+                        fr["thumb"] = _data_url(_jpg(img, 320, 80))
                     sess["frames"].append(fr)
                     continue
-                f = faces[0]
-                fr["q"] = f.quality
-                qok = (f.quality["size"] >= m["min_face"] and f.quality["yaw"] <= m["max_yaw"]
-                       and f.quality["pitch"] <= m["max_pitch"])
-                fr["quality_ok"] = qok
 
                 if mode == "enroll":
+                    f = faces[0]
+                    fr["q"] = f.quality
+                    fr["quality_ok"] = self._qok(f, m)
+                    fr["thumb"] = _data_url(_jpg(img, 320, 80))
                     cid = uuid.uuid4().hex[:8]
                     crop = _jpg(f.aligned, None, 95)
                     self.candidates[cid] = {"emb": f.embedding, "q": f.quality, "crop": crop}
@@ -168,42 +186,60 @@ class Scanner:
 
                 persons, M, owner = self.s.people.gallery()
                 if not len(M):
+                    if mode == "test":
+                        fr["thumb"] = _data_url(_jpg(img, 320, 80))
                     sess["frames"].append(fr)
                     decision = decision or {"result": "no_people"}
                     continue
-                sims = M @ f.embedding
-                per = np.full(len(persons), -1.0, np.float32)
-                np.maximum.at(per, owner, sims)
-                order = np.argsort(-per)
-                b = int(order[0])
-                bsim = float(per[b])
-                ssim = float(per[order[1]]) if len(order) > 1 else -1.0
-                p = persons[b]
-                strict = p.get("policy") == "strict"
-                thr = m["thr_strict"] if strict else m["thr_phone"]
-                need = int(m["consec_strict"] if strict else m["consec_phone"])
-                passed = qok and bsim >= thr and (bsim - ssim) >= m["min_margin"]
-                fr.update({"best": p["name"], "sim": round(bsim, 3), "second": round(ssim, 3),
-                           "thr": thr, "pass": passed})
-                if bsim > best_seen["sim"]:
-                    best_seen = {"name": p["name"], "sim": round(bsim, 3)}
-                if passed:
-                    cnt = cnt + 1 if cur_pid == p["id"] else 1
-                    cur_pid = p["id"]
-                elif qok:
-                    cur_pid, cnt = None, 0
-                fr["streak"] = cnt
+
+                # 프레임 안의 얼굴을 전부 판정
+                judged = [self._judge(f, persons, M, owner, m) for f in faces]
+                passing: dict[str, dict] = {}
+                for j in judged:
+                    if j["pass"] and (j["pid"] not in passing or j["sim"] > passing[j["pid"]]["sim"]):
+                        passing[j["pid"]] = j
+                    if j["sim"] > best_seen["sim"] and j["name"]:
+                        best_seen = {"name": j["name"], "sim": j["sim"]}
+                for pid in passing:
+                    streak[pid] = streak.get(pid, 0) + 1
+                    miss[pid] = 0
+                if any(j["qok"] for j in judged):
+                    # 품질 되는 얼굴이 있는데 이 사람이 통과 못 함 → 불일치 1회 (2회 연속이면 초기화)
+                    for pid in list(streak):
+                        if pid not in passing:
+                            miss[pid] = miss.get(pid, 0) + 1
+                            if miss[pid] > 1:
+                                streak[pid] = 0
+
+                j0 = judged[0]   # 가장 큰 얼굴 (화면 표시 호환용)
+                fr.update({"q": j0["q"], "quality_ok": j0["qok"], "best": j0["name"], "sim": j0["sim"],
+                           "second": j0["second"], "thr": j0["thr"], "pass": bool(passing)})
+                fr["faces"] = [{"n": k + 1, "best": j["name"], "sim": j["sim"], "thr": j["thr"],
+                                "pass": j["pass"], "qok": j["qok"], "size": j["q"]["size"]}
+                               for k, j in enumerate(judged)]
+                names = {p["id"]: p["name"] for p in persons}
+                fr["streaks"] = {names.get(pid, pid): c for pid, c in streak.items() if c}
+                fr["streak"] = max(streak.values(), default=0)
+                if mode == "test":
+                    fr["thumb"] = _data_url(_jpg(_annotate(img, faces, judged), 320, 80))
                 sess["frames"].append(fr)
 
-                if passed and cnt >= need:
-                    if not strict:
+                # 기준 연속 횟수를 채운 사람 → 유사도 높은 순으로 정책 확인
+                ready = sorted((j for pid, j in passing.items() if streak[pid] >= j["need"]),
+                               key=lambda j: -j["sim"])
+                for j in ready:
+                    p = j["person"]
+                    if not j["strict"]:
                         ok, detail = await self._phone_ok(p)
                         fr["phone"] = detail
                         if not ok:
                             phone_missing = {"person": p["name"], "detail": detail}
-                            continue    # 폰이 아직 안 잡힘 → 창 안에서 계속 시도
+                            continue    # 폰이 아직 안 잡힘 → 다른 사람 확인 / 창 안에서 계속 시도
                     decision = {"result": "match", "person": p["name"], "person_id": p["id"],
-                                "policy": p.get("policy"), "sim": round(bsim, 3), "streak": cnt}
+                                "policy": p.get("policy"), "sim": j["sim"], "streak": streak[p["id"]],
+                                "faces_max": faces_max}
+                    break
+                if decision:
                     break
         finally:
             prod.cancel()
@@ -236,6 +272,30 @@ class Scanner:
             return {"result": "phone_missing", **phone_missing, "best": best_seen}
         faces_seen = sum(1 for x in sess["frames"] if x.get("face"))
         return {"result": "no_match" if faces_seen else "no_face", "best": best_seen}
+
+    @staticmethod
+    def _qok(f, m):
+        return (f.quality["size"] >= m["min_face"] and f.quality["yaw"] <= m["max_yaw"]
+                and f.quality["pitch"] <= m["max_pitch"])
+
+    def _judge(self, f, persons, M, owner, m):
+        """얼굴 하나를 등록된 사람들과 비교해 통과 여부 판정."""
+        qok = self._qok(f, m)
+        sims = M @ f.embedding
+        per = np.full(len(persons), -1.0, np.float32)
+        np.maximum.at(per, owner, sims)
+        order = np.argsort(-per)
+        b = int(order[0])
+        bsim = float(per[b])
+        ssim = float(per[order[1]]) if len(order) > 1 else -1.0
+        p = persons[b]
+        strict = p.get("policy") == "strict"
+        thr = m["thr_strict"] if strict else m["thr_phone"]
+        need = int(m["consec_strict"] if strict else m["consec_phone"])
+        passed = qok and bsim >= thr and (bsim - ssim) >= m["min_margin"]
+        return {"person": p, "pid": p["id"], "name": p["name"], "sim": round(bsim, 3),
+                "second": round(ssim, 3), "thr": thr, "need": need, "strict": strict,
+                "pass": bool(passed), "qok": bool(qok), "q": f.quality}
 
     async def _phone_ok(self, p):
         ent = (p.get("phone_entity") or "").strip()
