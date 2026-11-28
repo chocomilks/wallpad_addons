@@ -14,6 +14,12 @@
  등록된 가족이면 HA 스크립트로 현관문을 여는 애드온입니다. 사람 등록·판정 기준 조정은 사이드바 패널에서 합니다.
  자세한 설정은 [doorface/README.md](doorface/README.md)를 참고하세요.
 
+### Wallpad Meter 원격검침 (wallpad_meter)
+
+ 코맥스 월패드 단지 포털의 원격검침(전기·가스·수도·온수·난방)을 망고 adb 경유로 주기적으로 읽어
+ 이번달·누적·일별 사용량과 예상 요금을 MQTT로 HA에 올리는 애드온입니다. 단가는 구성에서 바꿀 수 있습니다.
+ 자세한 설정은 [wallpad_meter/README.md](wallpad_meter/README.md)를 참고하세요.
+
 ### Kocom Wallpad Controller with RS485 (kocomRS485)
 
  랜이님이 만든 코콤 월패드 파이썬 프로그램을 애드온으로 포팅한 것입니다.
