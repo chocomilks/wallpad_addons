@@ -24,7 +24,9 @@ DEFAULT_SETTINGS = {
         "max_pitch": 0.35,
         "det_size": 320,        # 검출 입력 크기(작을수록 빠름, 문 앞 얼굴엔 320 충분)
     },
-    "door": {"auto_open": False, "script": "script.doorface_open"},
+    "door": {"auto_open": False, "script": "script.doorface_open",
+             "sensor": "",          # 현관문 열림센서(binary_sensor). 비우면 문 검사 안 함
+             "cooldown": 180},      # 문이 열리고 닫힌 뒤 이 시간(초) 동안은 실제 스캔 건너뜀(나가는 사람)
     "tuning_save": False,
 }
 
