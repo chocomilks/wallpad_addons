@@ -1,6 +1,6 @@
 {
   "name": "Doorface 현관 얼굴인식",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "slug": "doorface",
   "description": "코맥스 월패드 세대현관 카메라로 얼굴을 인식해 문을 여는 애드온 (망고 SSH → adb 경유)",
   "url": "https://github.com/chocomilks/wallpad_addons/tree/master/doorface",

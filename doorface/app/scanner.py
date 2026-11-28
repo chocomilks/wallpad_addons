@@ -9,6 +9,7 @@ import os
 import shutil
 import time
 import uuid
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -50,6 +51,7 @@ class Scanner:
         self.session: dict | None = None
         self.candidates: dict[str, dict] = {}   # 등록 후보 (메모리에만)
         self._cancel = False
+        self._phone_only = False
 
     @property
     def busy(self):
@@ -64,6 +66,7 @@ class Scanner:
             return {"error": "busy"}
         async with self.lock:
             self._cancel = False
+            self._phone_only = False
             st = self.s.settings.get()
             cap, m = st["capture"], st["match"]
             n = int(frames or cap["max_frames"])
@@ -82,11 +85,17 @@ class Scanner:
                     sess["countdown"] = i
                     await asyncio.sleep(1)
                 sess["countdown"] = 0
-                sess["state"] = "capturing"
-                result = await self._loop(sess, mode, n, cap, m, st)
+                skip = await self._door_guard(st) if mode == "auto" else None
+                if skip:
+                    result = skip
+                else:
+                    sess["state"] = "capturing"
+                    result = await self._loop(sess, mode, n, cap, m, st)
             except Exception as e:  # noqa: BLE001
                 log.exception("스캔 실패")
                 result = {"result": "error", "detail": str(e)}
+            if self._phone_only:
+                result["door_unknown"] = True    # 문 센서 이상으로 얼굴+폰 정책만 허용한 스캔
             result.update({"mode": mode, "trigger": trigger, "frames": len(sess["frames"]),
                            "duration": round(time.time() - sess["started"], 2),
                            "capture": sess.get("capture")})
@@ -128,6 +137,23 @@ class Scanner:
                 q.put_nowait(None)
 
         prod = asyncio.create_task(producer())
+        door = {"opened": False}
+        watch = None
+        sensor = (st["door"].get("sensor") or "").strip()
+        if mode == "auto" and sensor:
+            async def watcher():
+                # 스캔 중 문이 열리면(안에서 열어줌·비밀번호 등) 즉시 중지
+                while True:
+                    await asyncio.sleep(0.5)
+                    stt = await ha.state(sensor)
+                    if stt and stt.get("state") == "on":
+                        door["opened"] = True
+                        self._cancel = True
+                        log.info("스캔 중 현관문 열림 → 중지")
+                        if q.empty():
+                            q.put_nowait(None)   # 대기 중인 소비자 깨우기
+                        return
+            watch = asyncio.create_task(watcher())
         tuning_dir = None
         if mode == "auto" and st.get("tuning_save"):
             tuning_dir = os.path.join(self.s.data_dir, "tuning", time.strftime("%Y%m%d-%H%M%S"))
@@ -229,6 +255,9 @@ class Scanner:
                                key=lambda j: -j["sim"])
                 for j in ready:
                     p = j["person"]
+                    if j["strict"] and self._phone_only:
+                        fr["phone"] = "문 센서 이상 — 얼굴 단독 정책은 열지 않음"
+                        continue
                     if not j["strict"]:
                         ok, detail = await self._phone_ok(p)
                         fr["phone"] = detail
@@ -243,11 +272,20 @@ class Scanner:
                     break
         finally:
             prod.cancel()
-            try:
-                await prod
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+            if watch:
+                watch.cancel()
+            for t in (prod, watch):
+                if t is None:
+                    continue
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
             self._cancel = False
+
+        if door["opened"]:
+            return {"result": "door_opened", "best": best_seen,
+                    **({"matched": decision.get("person")} if decision and decision.get("person") else {})}
 
         if mode == "enroll":
             return {"result": "enroll", "candidates": len(self.candidates)}
@@ -256,6 +294,13 @@ class Scanner:
             if mode == "auto" and st["door"]["auto_open"]:
                 ent = st["door"]["script"]
                 try:
+                    # 판정과 동시에 문이 열렸으면 신호를 보내지 않음
+                    if sensor:
+                        ds = await ha.state(sensor)
+                        if ds and ds.get("state") == "on":
+                            decision["result"] = "door_opened"
+                            decision["opened"] = False
+                            return decision
                     # HA는 없는 엔티티 호출도 오류 없이 넘기므로 먼저 존재 확인
                     if not await ha.state(ent):
                         raise RuntimeError(f"{ent} 엔티티가 HA에 없음")
@@ -272,6 +317,32 @@ class Scanner:
             return {"result": "phone_missing", **phone_missing, "best": best_seen}
         faces_seen = sum(1 for x in sess["frames"] if x.get("face"))
         return {"result": "no_match" if faces_seen else "no_face", "best": best_seen}
+
+    async def _door_guard(self, st):
+        """실제 스캔 시작 전: 문이 열려 있거나 최근에 쓰였으면(나가는 사람) 건너뜀. 문제 없으면 None."""
+        sensor = (st["door"].get("sensor") or "").strip()
+        if not sensor:
+            return None
+        stt = await ha.state(sensor)
+        if not stt or stt.get("state") in ("unavailable", "unknown"):
+            # 문 상태를 모르면 나가는 사람인지 판단할 수 없음 → 설정에 따라
+            #  skip(기본): 건너뜀 / phone_only: 얼굴+폰 정책인 사람만 열 수 있게 하고 스캔
+            if st["door"].get("on_unknown", "skip") == "phone_only":
+                self._phone_only = True
+                log.warning("%s 상태 확인 불가 → 얼굴+폰 정책만 허용하고 스캔", sensor)
+                return None
+            return {"result": "door_skip", "detail": f"{sensor} 상태 확인 불가"}
+        if stt.get("state") == "on":
+            return {"result": "door_skip", "detail": "현관문이 열려 있음"}
+        cooldown = int(st["door"].get("cooldown", 180))
+        try:
+            changed = datetime.fromisoformat(stt["last_changed"]).timestamp()
+        except (KeyError, ValueError):
+            return None
+        ago = time.time() - changed
+        if ago < cooldown:
+            return {"result": "door_skip", "detail": f"문 사용 {int(ago)}초 전 (기준 {cooldown}초)"}
+        return None
 
     @staticmethod
     def _qok(f, m):
