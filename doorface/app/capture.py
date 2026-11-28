@@ -33,6 +33,36 @@ def soap_request_b64(w=720, h=480, path=REMOTE_FILE) -> str:
     return base64.b64encode(req.encode()).decode()
 
 
+def soap_getref_b64() -> str:
+    """cmxmm getRef: 사용 중인 영상·음성 세션 수 (통화 중이면 1 이상, 없으면 0)."""
+    body = ('<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" '
+            'xmlns:ns1="urn:cmm"><SOAP-ENV:Body><ns1:getRef></ns1:getRef></SOAP-ENV:Body></SOAP-ENV:Envelope>')
+    req = ("POST / HTTP/1.1\r\nContent-Type: text/xml\r\n"
+           f"Content-Length: {len(body.encode())}\r\nConnection: close\r\n\r\n{body}")
+    return base64.b64encode(req.encode()).decode()
+
+
+def hangup_script() -> str:
+    """#201 모니터링 통화 끊기.
+    월패드 '통화' 버튼 신호(ledaction.CONV)는 모니터링 중엔 1번째=응답(양방향 음성), 2번째=끊기.
+    통화가 없을 때 보내면 통화 화면을 새로 띄우므로, getRef로 통화 중일 때만 보냄."""
+    conv = "adb shell 'am broadcast -a com.commax.service.system.ledaction.CONV' >/dev/null 2>&1"
+    return "\n".join([
+        f"G='{soap_getref_b64()}'",
+        "ref(){ adb shell 'echo '\"$G\"' | busybox base64 -d | busybox nc -w 3 127.0.0.1 %d' "
+        "| tr -d '\\r' | sed -n 's/.*<out>\\([0-9]*\\)<.*/\\1/p'; }" % CMXMM_PORT,
+        'r=$(ref); echo "@@REF0 ${r:-?}"',
+        '[ -n "$r" ] || { echo "@@DONE unknown"; exit 0; }',
+        '[ "$r" -gt 0 ] || { echo "@@DONE none"; exit 0; }',
+        f"{conv}; sleep 1; {conv}; sleep 1",
+        'r=$(ref); echo "@@REF1 ${r:-?}"',
+        'if [ -n "$r" ] && [ "$r" -gt 0 ]; then',
+        f"  {conv}; sleep 1; r=$(ref); echo \"@@REF2 ${{r:-?}}\"",
+        "fi",
+        'if [ -n "$r" ] && [ "$r" -eq 0 ]; then echo "@@DONE ended"; else echo "@@DONE fail"; fi',
+    ]) + "\n"
+
+
 def remote_script(frames: int, warmup: int, call: bool) -> str:
     req = soap_request_b64()
     lines = [f"REQ='{req}'"]
@@ -174,6 +204,24 @@ class Capturer:
             await p.wait()
             if err.strip():
                 log.info("ssh: %s", err.decode(errors="replace").strip()[-300:])
+
+    async def hangup(self) -> str:
+        """통화 중이면 끊음. 반환: ended / none(통화 없음) / fail / unknown / error"""
+        if self.mock_dir:
+            return "none"
+        try:
+            p = await asyncio.create_subprocess_exec(
+                *self._ssh_cmd(), stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            out, _ = await asyncio.wait_for(p.communicate(hangup_script().encode()), 30)
+        except Exception as e:  # noqa: BLE001
+            log.warning("통화 끊기 실패: %s", e)
+            return "error"
+        text = out.decode(errors="replace")
+        status = next((ln.split()[1] for ln in text.splitlines() if ln.startswith("@@DONE")), "error")
+        refs = " ".join(ln.strip() for ln in text.splitlines() if ln.startswith("@@REF"))
+        log.info("통화 끊기: %s (%s)", status, refs)
+        return status
 
     async def _mock(self, n, warmup):
         files = sorted(glob.glob(os.path.join(self.mock_dir, "*.jp*g")))

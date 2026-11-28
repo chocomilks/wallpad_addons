@@ -113,6 +113,9 @@ class Scanner:
                            "duration": round(time.time() - sess["started"], 2),
                            "capture": sess.get("capture")})
             sess["result"], sess["state"] = result, "done"
+            # #201 모니터링 통화를 걸었으면 끝나고 바로 끊음 (월패드 타임아웃까지 두지 않음)
+            if st["capture"].get("hangup", True) and sess.get("capture") is not None:
+                asyncio.create_task(self._hangup(sess))
             if mode != "enroll":
                 self.s.events.add(result)
                 await self.s.notify_result(result)
@@ -346,6 +349,12 @@ class Scanner:
             return {"result": "phone_missing", **phone_missing, "best": best_seen}
         faces_seen = sum(1 for x in sess["frames"] if x.get("face"))
         return {"result": "no_match" if faces_seen else "no_face", "best": best_seen}
+
+    async def _hangup(self, sess):
+        try:
+            sess["hangup"] = await self.s.capturer.hangup()
+        except Exception as e:  # noqa: BLE001
+            sess["hangup"] = f"error: {e}"
 
     async def _door_guard(self, st):
         """실제 스캔 시작 전: 문이 열려 있거나 최근에 쓰였으면(나가는 사람) 건너뜀. 문제 없으면 None."""

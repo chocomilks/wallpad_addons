@@ -12,7 +12,8 @@ import numpy as np
 
 DEFAULT_SETTINGS = {
     "mango": {"host": "", "port": 22, "user": "root"},
-    "capture": {"warmup": 2, "window_sec": 12, "max_frames": 30},
+    "capture": {"warmup": 2, "window_sec": 12, "max_frames": 30,
+                "hangup": True},   # 스캔 후 #201 통화 끊기 (통화 버튼 신호 2번)
     "match": {
         "thr_phone": 0.50,      # 얼굴+폰 정책 유사도 기준
         "consec_phone": 2,
