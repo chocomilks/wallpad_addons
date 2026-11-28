@@ -81,9 +81,10 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;p
     <h2>사람 추가</h2>
     <div class="row">
       <input id="pName" placeholder="이름">
-      <select id="pPolicy"><option value="phone">얼굴 + 폰 근접</option><option value="strict">얼굴 단독 (엄격)</option></select>
+      <select id="pPolicy"><option value="adaptive">폰 있으면 완화 (없으면 엄격)</option><option value="phone">얼굴 + 폰 근접 (폰 필수)</option><option value="strict">얼굴 단독 (엄격)</option></select>
       <button class="btn pri" id="pAdd">추가</button>
     </div>
+    <p class="mut" style="margin:8px 0 0"><b>폰 있으면 완화</b>: 폰이 근처면 가벼운 기준으로 빨리, 폰이 없으면 엄격 기준으로 엽니다 · <b>얼굴 + 폰 근접</b>: 폰이 있어야만 · <b>얼굴 단독</b>: 폰 없이 엄격 기준만</p>
     <p class="mut" style="margin:8px 0 0">사진은 <b>등록 촬영</b> 탭에서 도어카메라로 찍어 넣는 게 가장 정확합니다. 휴대폰 사진 업로드도 됩니다.</p>
   </div>
   <div id="pList"></div>
@@ -108,7 +109,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;p
       <span>선택 <b id="eSel">0</b>장 →</span>
       <select id="eWho"></select>
       <input id="eNew" placeholder="새 사람 이름" class="hide">
-      <select id="eNewPol" class="hide"><option value="phone">얼굴 + 폰 근접</option><option value="strict">얼굴 단독 (엄격)</option></select>
+      <select id="eNewPol" class="hide"><option value="adaptive">폰 있으면 완화 (없으면 엄격)</option><option value="phone">얼굴 + 폰 근접 (폰 필수)</option><option value="strict">얼굴 단독 (엄격)</option></select>
       <button class="btn pri" id="eSave">등록</button>
     </div>
   </div>
@@ -214,7 +215,7 @@ function frameCard(f){const d=document.createElement('div');
   d.innerHTML=(f.thumb?`<img src="${f.thumb}">`:'')+`<div class="m">${m}</div>`;return d}
 function showRes(el,r){el.classList.remove('hide');const ok=r.result==='match';
   let t=`<span class="${ok?'ok':r.result==='error'?'bad':'warn'}">${RES[r.result]||r.result}</span>`;
-  if(ok)t+=` — ${esc(r.person)} (${r.sim}, 연속 ${r.streak})`+(r.mode==='test'?' <span class="mut">· 테스트라 문은 안 엶</span>':r.opened?' · 문 열림':r.open_error?` · <span class="bad">문 열기 실패: ${esc(r.open_error)}</span>`:' <span class="mut">· 자동 열기 꺼짐</span>');
+  if(ok)t+=` — ${esc(r.person)} (${r.sim}, 연속 ${r.streak}${r.via==='phone'?', 폰 확인':r.via==='face'?', 얼굴만':''})`+(r.mode==='test'?' <span class="mut">· 테스트라 문은 안 엶</span>':r.opened?' · 문 열림':r.open_error?` · <span class="bad">문 열기 실패: ${esc(r.open_error)}</span>`:' <span class="mut">· 자동 열기 꺼짐</span>');
   else if(r.best&&r.best.name)t+=` <span class="mut">최고 ${esc(r.best.name)} ${r.best.sim}</span>`;
   if(r.detail)t+=` <span class="mut">${esc(r.detail)}</span>`;
   if(r.door_unknown)t+=' <span class="warn">· 문 센서 이상(얼굴+폰만 허용)</span>';
@@ -248,13 +249,13 @@ async function loadPeople(){PEOPLE=await api('people');const box=$('#pList');box
   if(!PEOPLE.length)box.innerHTML='<div class="card mut">등록된 사람이 없습니다.</div>';
   PEOPLE.forEach(p=>{const c=document.createElement('div');c.className='card';
     c.innerHTML=`<div class="row"><input class="nm" value="${esc(p.name)}" style="font-weight:600;width:140px">
-      <select class="pol"><option value="phone">얼굴 + 폰 근접</option><option value="strict">얼굴 단독 (엄격)</option></select>
+      <select class="pol"><option value="adaptive">폰 있으면 완화 (없으면 엄격)</option><option value="phone">얼굴 + 폰 근접 (폰 필수)</option><option value="strict">얼굴 단독 (엄격)</option></select>
       <label class="row" style="gap:4px"><input type="checkbox" class="en" ${p.enabled?'checked':''}>사용</label><span class="sp"></span>
       <label class="btn">사진 업로드<input type="file" accept="image/*" class="up hide"></label><button class="btn danger del">삭제</button></div>
       <div class="row ph" style="margin-top:8px"><label class="f">폰 근접 엔티티<input class="pe" value="${esc(p.phone_entity)}" placeholder="sensor.my_iphone_ble" style="width:220px"></label>
       <label class="f">통과 상태값(쉼표 구분)<input class="ps" value="${esc(p.phone_states)}" style="width:160px"></label></div>
       <div class="faces">${p.samples.map(s=>`<div><img src="api/faces/${s.file}" title="${s.q.size}px"><button data-s="${s.id}">×</button></div>`).join('')||'<span class="mut">사진 없음</span>'}</div>`;
-    const pol=c.querySelector('.pol');pol.value=p.policy;c.querySelector('.ph').classList.toggle('hide',p.policy==='strict');
+    const pol=c.querySelector('.pol');pol.value=p.policy||'phone';c.querySelector('.ph').classList.toggle('hide',p.policy==='strict');
     const save=async patch=>{await api('people/'+p.id,{method:'PATCH',body:patch});loadStatus()};
     c.querySelector('.nm').onchange=e=>save({name:e.target.value});
     pol.onchange=e=>{save({policy:e.target.value});c.querySelector('.ph').classList.toggle('hide',e.target.value==='strict')};

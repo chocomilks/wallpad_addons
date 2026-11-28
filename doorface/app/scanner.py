@@ -33,6 +33,19 @@ def _data_url(b: bytes) -> str:
 MAX_FACES = 4   # 한 프레임에서 판정할 최대 얼굴 수 (큰 순)
 
 
+def _bump(streak, miss, passing, any_qok):
+    """이번 프레임 통과자는 +1, 품질 되는 얼굴이 있는데 통과 못 한 사람은 불일치 1회(2회 연속이면 초기화)."""
+    for pid in passing:
+        streak[pid] = streak.get(pid, 0) + 1
+        miss[pid] = 0
+    if any_qok:
+        for pid in list(streak):
+            if pid not in passing:
+                miss[pid] = miss.get(pid, 0) + 1
+                if miss[pid] > 1:
+                    streak[pid] = 0
+
+
 def _annotate(img, faces, judged):
     """테스트 화면용: 얼굴마다 상자와 번호 (초록=통과, 빨강=불일치, 회색=품질 미달)."""
     out = img.copy()
@@ -159,8 +172,11 @@ class Scanner:
             tuning_dir = os.path.join(self.s.data_dir, "tuning", time.strftime("%Y%m%d-%H%M%S"))
             os.makedirs(tuning_dir, exist_ok=True)
 
-        streak: dict[str, int] = {}   # 사람별 연속 일치 횟수
-        miss: dict[str, int] = {}     # 사람별 연속 불일치 프레임 (1번까지 허용)
+        # 사람별 연속 일치 횟수 — 가벼운 기준(얼굴+폰용)과 엄격 기준(얼굴 단독용)을 따로 셈
+        streak: dict[str, int] = {}     # 가벼운 기준 (thr_phone)
+        miss: dict[str, int] = {}       # 연속 불일치 프레임 (1번까지 허용)
+        streak_s: dict[str, int] = {}   # 엄격 기준 (thr_strict)
+        miss_s: dict[str, int] = {}
         best_seen = {"name": None, "sim": 0.0}
         phone_missing = None
         decision = None
@@ -220,52 +236,65 @@ class Scanner:
 
                 # 프레임 안의 얼굴을 전부 판정
                 judged = [self._judge(f, persons, M, owner, m) for f in faces]
-                passing: dict[str, dict] = {}
+                passing: dict[str, dict] = {}     # 가벼운 기준 통과
+                passing_s: dict[str, dict] = {}   # 엄격 기준 통과
                 for j in judged:
-                    if j["pass"] and (j["pid"] not in passing or j["sim"] > passing[j["pid"]]["sim"]):
+                    if j["pass_l"] and (j["pid"] not in passing or j["sim"] > passing[j["pid"]]["sim"]):
                         passing[j["pid"]] = j
+                    if j["pass_s"] and (j["pid"] not in passing_s or j["sim"] > passing_s[j["pid"]]["sim"]):
+                        passing_s[j["pid"]] = j
                     if j["sim"] > best_seen["sim"] and j["name"]:
                         best_seen = {"name": j["name"], "sim": j["sim"]}
-                for pid in passing:
-                    streak[pid] = streak.get(pid, 0) + 1
-                    miss[pid] = 0
-                if any(j["qok"] for j in judged):
-                    # 품질 되는 얼굴이 있는데 이 사람이 통과 못 함 → 불일치 1회 (2회 연속이면 초기화)
-                    for pid in list(streak):
-                        if pid not in passing:
-                            miss[pid] = miss.get(pid, 0) + 1
-                            if miss[pid] > 1:
-                                streak[pid] = 0
+                any_qok = any(j["qok"] for j in judged)
+                _bump(streak, miss, passing, any_qok)
+                _bump(streak_s, miss_s, passing_s, any_qok)
 
                 j0 = judged[0]   # 가장 큰 얼굴 (화면 표시 호환용)
                 fr.update({"q": j0["q"], "quality_ok": j0["qok"], "best": j0["name"], "sim": j0["sim"],
-                           "second": j0["second"], "thr": j0["thr"], "pass": bool(passing)})
+                           "second": j0["second"], "thr": j0["thr"], "pass": any(j["pass"] for j in judged)})
                 fr["faces"] = [{"n": k + 1, "best": j["name"], "sim": j["sim"], "thr": j["thr"],
                                 "pass": j["pass"], "qok": j["qok"], "size": j["q"]["size"]}
                                for k, j in enumerate(judged)]
-                names = {p["id"]: p["name"] for p in persons}
-                fr["streaks"] = {names.get(pid, pid): c for pid, c in streak.items() if c}
-                fr["streak"] = max(streak.values(), default=0)
+                fr["streaks"] = {}
+                for p in persons:
+                    lo, st_ = streak.get(p["id"], 0), streak_s.get(p["id"], 0)
+                    pol = p.get("policy")
+                    if pol == "strict" and st_:
+                        fr["streaks"][p["name"]] = st_
+                    elif pol == "adaptive" and (lo or st_):
+                        fr["streaks"][p["name"]] = f"{lo}·엄격{st_}"
+                    elif pol not in ("strict", "adaptive") and lo:
+                        fr["streaks"][p["name"]] = lo
+                fr["streak"] = max(list(streak.values()) + list(streak_s.values()), default=0)
                 if mode == "test":
                     fr["thumb"] = _data_url(_jpg(_annotate(img, faces, judged), 320, 80))
                 sess["frames"].append(fr)
 
                 # 기준 연속 횟수를 채운 사람 → 유사도 높은 순으로 정책 확인
-                ready = sorted((j for pid, j in passing.items() if streak[pid] >= j["need"]),
-                               key=lambda j: -j["sim"])
-                for j in ready:
+                cands = {**passing_s, **passing}
+                for pid, j in sorted(cands.items(), key=lambda kv: -kv[1]["sim"]):
                     p = j["person"]
-                    if j["strict"] and self._phone_only:
-                        fr["phone"] = "문 센서 이상 — 얼굴 단독 정책은 열지 않음"
-                        continue
-                    if not j["strict"]:
+                    pol = p.get("policy") or "phone"
+                    phone_ready = pol in ("phone", "adaptive") and streak.get(pid, 0) >= m["consec_phone"]
+                    face_ready = pol in ("strict", "adaptive") and streak_s.get(pid, 0) >= m["consec_strict"]
+                    via = None
+                    if phone_ready:
                         ok, detail = await self._phone_ok(p)
                         fr["phone"] = detail
-                        if not ok:
+                        if ok:
+                            via = "phone"
+                        elif not face_ready:
                             phone_missing = {"person": p["name"], "detail": detail}
-                            continue    # 폰이 아직 안 잡힘 → 다른 사람 확인 / 창 안에서 계속 시도
-                    decision = {"result": "match", "person": p["name"], "person_id": p["id"],
-                                "policy": p.get("policy"), "sim": j["sim"], "streak": streak[p["id"]],
+                    if via is None and face_ready:
+                        if self._phone_only:
+                            fr["phone"] = "문 센서 이상 — 얼굴만으로는 열지 않음"
+                        else:
+                            via = "face"
+                    if via is None:
+                        continue    # 폰이 아직 안 잡힘 / 엄격 기준 미달 → 창 안에서 계속 시도
+                    decision = {"result": "match", "person": p["name"], "person_id": pid,
+                                "policy": pol, "via": via, "sim": j["sim"],
+                                "streak": streak.get(pid, 0) if via == "phone" else streak_s.get(pid, 0),
                                 "faces_max": faces_max}
                     break
                 if decision:
@@ -360,13 +389,15 @@ class Scanner:
         bsim = float(per[b])
         ssim = float(per[order[1]]) if len(order) > 1 else -1.0
         p = persons[b]
-        strict = p.get("policy") == "strict"
-        thr = m["thr_strict"] if strict else m["thr_phone"]
-        need = int(m["consec_strict"] if strict else m["consec_phone"])
-        passed = qok and bsim >= thr and (bsim - ssim) >= m["min_margin"]
+        pol = p.get("policy") or "phone"
+        margin_ok = qok and (bsim - ssim) >= m["min_margin"]
+        pass_l = bool(margin_ok and bsim >= m["thr_phone"])    # 가벼운 기준 (폰과 함께)
+        pass_s = bool(margin_ok and bsim >= m["thr_strict"])   # 엄격 기준 (얼굴만)
+        thr = m["thr_strict"] if pol == "strict" else m["thr_phone"]
         return {"person": p, "pid": p["id"], "name": p["name"], "sim": round(bsim, 3),
-                "second": round(ssim, 3), "thr": thr, "need": need, "strict": strict,
-                "pass": bool(passed), "qok": bool(qok), "q": f.quality}
+                "second": round(ssim, 3), "thr": thr, "policy": pol,
+                "pass": pass_s if pol == "strict" else pass_l, "pass_l": pass_l, "pass_s": pass_s,
+                "qok": bool(qok), "q": f.quality}
 
     async def _phone_ok(self, p):
         ent = (p.get("phone_entity") or "").strip()
