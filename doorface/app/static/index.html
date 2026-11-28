@@ -145,6 +145,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;p
     <div class="row" style="margin-top:8px">
       <label class="f">현관문 열림센서 (비우면 문 검사 안 함)<input id="sDoor" style="width:280px" placeholder="binary_sensor.현관문_열림센서"></label>
       <label class="f">문 사용 후 스캔 금지(초)<input id="sCool" type="number" min="0" max="900" style="width:100px"></label>
+      <label class="f">센서 상태를 모를 때<select id="sUnk"><option value="skip">건너뜀 (안전)</option><option value="phone_only">스캔 — 얼굴+폰 정책인 사람만 열림</option></select></label>
     </div>
     <p class="mut" style="margin:8px 0 0">실제 스캔은 문이 열려 있거나 문이 열리고 닫힌 뒤 이 시간 안이면 건너뜁니다(나가는 사람 오인 방지). 스캔 중 문이 열리면 즉시 중지하고, 판정 순간 문이 열려 있으면 열기 신호를 보내지 않습니다.</p>
     <p class="mut" style="margin:8px 0 0">스크립트에는 <code>person</code>, <code>similarity</code> 변수가 전달됩니다. RS485 열기와 재시도는 스크립트에서 처리하세요.</p>
@@ -216,6 +217,7 @@ function showRes(el,r){el.classList.remove('hide');const ok=r.result==='match';
   if(ok)t+=` — ${esc(r.person)} (${r.sim}, 연속 ${r.streak})`+(r.mode==='test'?' <span class="mut">· 테스트라 문은 안 엶</span>':r.opened?' · 문 열림':r.open_error?` · <span class="bad">문 열기 실패: ${esc(r.open_error)}</span>`:' <span class="mut">· 자동 열기 꺼짐</span>');
   else if(r.best&&r.best.name)t+=` <span class="mut">최고 ${esc(r.best.name)} ${r.best.sim}</span>`;
   if(r.detail)t+=` <span class="mut">${esc(r.detail)}</span>`;
+  if(r.door_unknown)t+=' <span class="warn">· 문 센서 이상(얼굴+폰만 허용)</span>';
   t+=` <span class="mut" style="font-weight:400">· ${r.frames}장 / ${r.duration}초</span>`;
   if(r.capture)t+='<br>'+capLine(r.capture);el.innerHTML=t}
 function capLine(c,live){const n=c.ok+c.empty+c.partial;return `<span class="mut" style="font-size:13px;font-weight:400">${live?'촬영 중 · ':''}캡처 ${n}회 (정상 ${c.ok} · 실패 ${c.empty} · 잘림 ${c.partial}${c.dropped?' · 건너뜀 '+c.dropped:''}) · 장당 ${n?(c.cap_sum/n).toFixed(2):'-'}초 · 첫 정상 프레임 ${c.first_at??'-'}초</span>`}
@@ -279,10 +281,10 @@ function sliders(el,defs,vals,key){el.innerHTML=defs.map(([k,l,a,b,s])=>`<div cl
 async function fillSettings(){await loadStatus();const s=ST.settings;
   $('#sHost').value=s.mango.host;$('#sPort').value=s.mango.port;$('#sUser').value=s.mango.user;$('#sKey').textContent=ST.pubkey;
   sliders($('#sMatch'),MATCH,s.match,'match');sliders($('#sCap'),CAP,s.capture,'capture');
-  $('#sScript').value=s.door.script;$('#sDoor').value=s.door.sensor||'';$('#sCool').value=s.door.cooldown??180;$('#sTune').checked=s.tuning_save;
+  $('#sScript').value=s.door.script;$('#sDoor').value=s.door.sensor||'';$('#sCool').value=s.door.cooldown??180;$('#sUnk').value=s.door.on_unknown||'skip';$('#sTune').checked=s.tuning_save;
   const t=await api('tuning');$('#sTuneInfo').textContent=`저장된 스캔 ${t.sessions}건`}
 $('#sSave').onclick=async()=>{const p={mango:{host:$('#sHost').value.trim(),port:+$('#sPort').value||22,user:$('#sUser').value.trim()||'root'},
-  match:{},capture:{},door:{script:$('#sScript').value.trim(),sensor:$('#sDoor').value.trim(),cooldown:+$('#sCool').value||0},tuning_save:$('#sTune').checked};
+  match:{},capture:{},door:{script:$('#sScript').value.trim(),sensor:$('#sDoor').value.trim(),cooldown:+$('#sCool').value||0,on_unknown:$('#sUnk').value},tuning_save:$('#sTune').checked};
   $$('#t-settings input[type=range]').forEach(i=>p[i.dataset.g][i.dataset.k]=+i.value);
   await api('settings',{method:'POST',body:p});$('#sSaved').textContent='저장됨';setTimeout(()=>$('#sSaved').textContent='',1500);loadStatus()};
 $('#sTest').onclick=async()=>{await $('#sSave').onclick();const o=$('#sTestOut');o.classList.remove('hide');o.textContent='확인 중...';

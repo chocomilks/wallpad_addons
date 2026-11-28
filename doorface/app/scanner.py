@@ -51,6 +51,7 @@ class Scanner:
         self.session: dict | None = None
         self.candidates: dict[str, dict] = {}   # 등록 후보 (메모리에만)
         self._cancel = False
+        self._phone_only = False
 
     @property
     def busy(self):
@@ -65,6 +66,7 @@ class Scanner:
             return {"error": "busy"}
         async with self.lock:
             self._cancel = False
+            self._phone_only = False
             st = self.s.settings.get()
             cap, m = st["capture"], st["match"]
             n = int(frames or cap["max_frames"])
@@ -92,6 +94,8 @@ class Scanner:
             except Exception as e:  # noqa: BLE001
                 log.exception("스캔 실패")
                 result = {"result": "error", "detail": str(e)}
+            if self._phone_only:
+                result["door_unknown"] = True    # 문 센서 이상으로 얼굴+폰 정책만 허용한 스캔
             result.update({"mode": mode, "trigger": trigger, "frames": len(sess["frames"]),
                            "duration": round(time.time() - sess["started"], 2),
                            "capture": sess.get("capture")})
@@ -251,6 +255,9 @@ class Scanner:
                                key=lambda j: -j["sim"])
                 for j in ready:
                     p = j["person"]
+                    if j["strict"] and self._phone_only:
+                        fr["phone"] = "문 센서 이상 — 얼굴 단독 정책은 열지 않음"
+                        continue
                     if not j["strict"]:
                         ok, detail = await self._phone_ok(p)
                         fr["phone"] = detail
@@ -318,7 +325,12 @@ class Scanner:
             return None
         stt = await ha.state(sensor)
         if not stt or stt.get("state") in ("unavailable", "unknown"):
-            # 문 상태를 모르면 나가는 사람인지 판단할 수 없으므로 안전하게 건너뜀
+            # 문 상태를 모르면 나가는 사람인지 판단할 수 없음 → 설정에 따라
+            #  skip(기본): 건너뜀 / phone_only: 얼굴+폰 정책인 사람만 열 수 있게 하고 스캔
+            if st["door"].get("on_unknown", "skip") == "phone_only":
+                self._phone_only = True
+                log.warning("%s 상태 확인 불가 → 얼굴+폰 정책만 허용하고 스캔", sensor)
+                return None
             return {"result": "door_skip", "detail": f"{sensor} 상태 확인 불가"}
         if stt.get("state") == "on":
             return {"result": "door_skip", "detail": "현관문이 열려 있음"}
